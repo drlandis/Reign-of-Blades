@@ -152,11 +152,9 @@ input, textarea, select { outline: none; }
     return cv.toDataURL("image/png");
   }
 
-  const icon192 = makeIcon(192);
-  const icon512 = makeIcon(512);
-
-  // Set apple-touch-icon
-  document.getElementById("apple-touch-icon").href = icon192;
+  let icon192 = "", icon512 = "";
+  try{ icon192 = makeIcon(192); icon512 = makeIcon(512); }catch(e){ console.warn("[RoS] Icon gen failed",e); }
+  try{ document.getElementById("apple-touch-icon").href = icon192; }catch(e){}
 
   // ── Create manifest blob ──────────────────────────────────────────────────
   const manifest = {
@@ -175,9 +173,11 @@ input, textarea, select { outline: none; }
     categories: ["games","entertainment"],
     screenshots: [],
   };
-  const manifestBlob = new Blob([JSON.stringify(manifest)], {type:"application/manifest+json"});
-  const manifestUrl = URL.createObjectURL(manifestBlob);
-  document.getElementById("pwa-manifest").href = manifestUrl;
+  try{
+    const manifestBlob = new Blob([JSON.stringify(manifest)], {type:"application/manifest+json"});
+    const manifestUrl = URL.createObjectURL(manifestBlob);
+    document.getElementById("pwa-manifest").href = manifestUrl;
+  }catch(e){ console.warn("[RoS] Manifest failed",e); }
 
   // ── Register Service Worker (real file at ./sw.js) ───────────────────────
   if("serviceWorker" in navigator){
@@ -218,6 +218,23 @@ input, textarea, select { outline: none; }
 </head>
 <body>
 <div id="root"></div>
+<div id="crash-screen" style="display:none;position:fixed;inset:0;background:#0a0a0a;color:#c9a84c;font-family:Georgia,serif;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;z-index:9999;">
+  <div style="font-size:2rem;margin-bottom:16px">⚔️</div>
+  <div style="font-size:1.1rem;margin-bottom:8px;font-family:'Cinzel',serif">Reign of Swords</div>
+  <div style="font-size:.85rem;color:#666;margin-bottom:24px">Something went wrong loading the game.</div>
+  <button onclick="location.reload()" style="background:#8b1a1a;border:1px solid #c9a84c;color:#fff;padding:12px 24px;border-radius:8px;font-family:Georgia,serif;font-size:.9rem;cursor:pointer">Reload</button>
+</div>
+<script>
+window.onerror=function(msg,src,line,col,err){
+  console.error("[RoS] Error:",msg,src,line,col,err);
+  var r=document.getElementById("root");
+  var cr=document.getElementById("crash-screen");
+  if(r&&!r.hasChildNodes()&&cr){cr.style.display="flex";}
+};
+window.addEventListener("unhandledrejection",function(e){
+  console.error("[RoS] Unhandled promise:",e.reason);
+});
+</script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useReducer, useCallback, useMemo } = React;
 
