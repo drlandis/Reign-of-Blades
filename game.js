@@ -563,6 +563,12 @@ function parseDM(text) {
   const ir = /\[ITEM: ([^\]]+)\]/gi;
   let im;
   while ((im = ir.exec(text)) !== null) items.push(im[1]);
+  const npcs = {};
+  const npcRx = /\[NPC: ([^,\]]+),?\s*([^\]]*)?\]/gi;
+  let npcM;
+  while ((npcM = npcRx.exec(text)) !== null) {
+    npcs[npcM[1].trim()] = npcM[2]?.trim() || "neutral";
+  }
   const clean = text.replace(/\[ROLL:[^\]]+\]/gi, "").replace(/\[COMBAT:[^\]]+\]/gi, "").replace(/\[QUEST:[^\]]+\]/gi, "").replace(/\[NPC:[^\]]+\]/gi, "").replace(/\[MILESTONE:[^\]]+\]/gi, "").replace(/\[XP:[^\]]+\]/gi, "").replace(/\[GOLD:[^\]]+\]/gi, "").replace(/\[ITEM:[^\]]+\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
   return {
     clean,
@@ -5600,7 +5606,8 @@ function GameScreen({
         xp,
         gold,
         items,
-        quests
+        quests,
+        npcs
       } = parseDM(reply);
       setMsgs(m => [...m, {
         role: "assistant",
