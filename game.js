@@ -461,16 +461,52 @@ function getAuthToken() {
     const raw = localStorage.getItem(AUTH_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    // Check expiry
     if (parsed.expires_at && Date.now() / 1000 > parsed.expires_at - 60) return null;
     return parsed.access_token || null;
   } catch {
     return null;
   }
 }
+
+async function refreshAuthToken() {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    if (!parsed.refresh_token) return false;
+    const r = await fetch(API_BASE + "/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: parsed.refresh_token })
+    });
+    if (!r.ok) return false;
+    const d = await r.json();
+    localStorage.setItem(AUTH_KEY, JSON.stringify(d.session));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Auto-refresh token every 45 minutes
+setInterval(async () => {
+  const raw = localStorage.getItem(AUTH_KEY);
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw);
+    const expiresIn = (parsed.expires_at || 0) - Date.now() / 1000;
+    if (expiresIn < 900) { // refresh if less than 15 min left
+      await refreshAuthToken();
+    }
+  } catch {}
+}, 45 * 60 * 1000);
 async function callClaude(apiKey, sys, messages, maxTokens = 900) {
   var _d$content;
-  const token = getAuthToken();
+  let token = getAuthToken();
+  if (!token) {
+    const refreshed = await refreshAuthToken();
+    if (refreshed) token = getAuthToken();
+  }
   if (!token) throw new Error("Not logged in. Please sign in to play.");
   const r = await fetch(API_BASE + "/claude", {
     method: "POST",
@@ -4631,7 +4667,8 @@ function Silhouette({
 
 // Spell slots display
 function SpellsTab({
-  char
+  char,
+  spellSlots
 }) {
   const isCaster = CASTER_CLASSES.includes(char.cls);
   const isWarlock = char.cls === "Warlock";
@@ -4754,23 +4791,34 @@ function SpellsTab({
     }
   }, Array.from({
     length: count
-  }).map((_, j) => /*#__PURE__*/React.createElement("div", {
-    key: j,
-    style: {
-      width: 22,
-      height: 22,
-      borderRadius: "50%",
-      background: "var(--maroon)",
-      border: "1px solid var(--gold)",
-      boxShadow: "0 0 8px #7c3aed44"
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
+  }).map((_, j) => {
+    const slotKey = "level_" + (i + 1);
+    const liveSlot = spellSlots && spellSlots[slotKey];
+    const used = liveSlot ? liveSlot.max - liveSlot.remaining : 0;
+    const isUsed = j < used;
+    return /*#__PURE__*/React.createElement("div", {
+      key: j,
+      style: {
+        width: 22,
+        height: 22,
+        borderRadius: "50%",
+        background: isUsed ? "var(--bg2)" : "var(--maroon)",
+        border: isUsed ? "1px solid var(--border2)" : "1px solid var(--gold)",
+        boxShadow: isUsed ? "none" : "0 0 8px #7c3aed44",
+        opacity: isUsed ? 0.4 : 1
+      }
+    });
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: ".72rem",
       color: "var(--text3)",
       flexShrink: 0
     }
-  }, count, " slots"))), /*#__PURE__*/React.createElement("div", {
+  }, (() => {
+    const slotKey = "level_" + (i + 1);
+    const liveSlot = spellSlots && spellSlots[slotKey];
+    return liveSlot ? liveSlot.remaining + "/" + liveSlot.max : count + " slots";
+  })())))  , /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 16,
       background: "var(--bg3)",
@@ -4801,6 +4849,7 @@ function SpellsTab({
 function CharacterSheet({
   char,
   flags,
+  spellSlots,
   onExport,
   onSave
 }) {
@@ -5170,7 +5219,8 @@ function CharacterSheet({
       marginLeft: 8
     }
   }, "\xD7", item.qty || 1)))), page === 3 && /*#__PURE__*/React.createElement(SpellsTab, {
-    char: char
+    char: char,
+    spellSlots: spellSlots
   }), page === 4 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: ".95rem",
@@ -7066,6 +7116,7 @@ function GameScreen({
   }, rightTab === "char" && /*#__PURE__*/React.createElement(CharacterSheet, {
     char: char,
     flags: flags,
+    spellSlots: spellSlots,
     onExport: () => exportChar(char),
     onSave: saveG
   }), rightTab === "combat" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -7556,6 +7607,114 @@ function LoginScreen({
   }, mode === "login" ? "Create one" : "Sign in"))));
 }
 
+function CharSelectScreen({
+  onSelect,
+  onNew,
+  onLogout
+}) {
+  const [characters, setCharacters] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [deleting, setDeleting] = useState(null);
+
+  useEffect(() => { loadChars(); }, []);
+
+  async function loadChars() {
+    setLoading(true);
+    const token = getAuthToken();
+    if (!token) { setErr("Session expired. Please log in again."); setLoading(false); return; }
+    try {
+      const r = await fetch(API_BASE + "/characters", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || "Failed to load characters."); setLoading(false); return; }
+      setCharacters(d);
+    } catch { setErr("Connection error."); }
+    setLoading(false);
+  }
+
+  async function deleteChar(id, name) {
+    if (!window.confirm("Delete " + name + "? This cannot be undone.")) return;
+    setDeleting(id);
+    const token = getAuthToken();
+    await fetch(API_BASE + "/characters/" + id, {
+      method: "DELETE",
+      headers: { "Authorization": "Bearer " + token }
+    });
+    setCharacters(cs => cs.filter(c => c.id !== id));
+    setDeleting(null);
+  }
+
+  const clsIcons = { Fighter: "\u2694\uFE0F", Wizard: "\uD83E\uDDD9", Rogue: "\uD83D\uDDE1\uFE0F", Cleric: "\u271D\uFE0F", Warlock: "\uD83D\uDC41\uFE0F", Druid: "\uD83C\uDF3F", Paladin: "\uD83D\uDEE1\uFE0F", Ranger: "\uD83C\uDFF9", Barbarian: "\uD83E\uDAAA", Sorcerer: "\u2728" };
+  const clsColors = { Fighter: "#ef4444", Wizard: "#818cf8", Rogue: "#f59e0b", Cleric: "#34d399", Warlock: "#a78bfa", Druid: "#86efac", Paladin: "#fbbf24", Ranger: "#6ee7b7", Barbarian: "#f97316", Sorcerer: "#e879f9" };
+
+  return React.createElement("div", {
+    style: { height: "100vh", background: "var(--bg)", display: "flex", flexDirection: "column", position: "relative", overflow: "hidden" }
+  },
+  React.createElement(Stars, { count: 20 }),
+  React.createElement("div", {
+    style: { position: "relative", zIndex: 1, display: "flex", flexDirection: "column", height: "100%", padding: "0 20px" }
+  },
+  React.createElement("div", {
+    style: { paddingTop: 48, paddingBottom: 20, textAlign: "center" }
+  },
+  React.createElement("div", {
+    style: { fontFamily: "'Cinzel',serif", fontSize: "1.5rem", color: "var(--gold)", marginBottom: 4 }
+  }, "Your Characters"),
+  React.createElement("div", {
+    style: { fontSize: ".8rem", color: "var(--text4)" }
+  }, "Choose a character or create a new one")),
+  loading && React.createElement("div", {
+    style: { textAlign: "center", color: "var(--text4)", padding: 40 }
+  }, "Loading..."),
+  err && React.createElement("div", {
+    style: { color: "#ef4444", textAlign: "center", fontSize: ".85rem", marginBottom: 12 }
+  }, err),
+  !loading && React.createElement("div", {
+    style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingBottom: 20 }
+  },
+  characters.length === 0 && React.createElement("div", {
+    style: { textAlign: "center", color: "var(--text4)", padding: "40px 20px", fontSize: ".9rem" }
+  }, "No characters yet. Create your first one!"),
+  characters.map(c => {
+    const ch = c.data || {};
+    const clsColor = clsColors[ch.cls] || "var(--gold)";
+    const icon = clsIcons[ch.cls] || "\u2694\uFE0F";
+    return React.createElement("div", {
+      key: c.id,
+      style: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer" },
+      onClick: () => onSelect(c)
+    },
+    React.createElement("div", {
+      style: { width: 44, height: 44, borderRadius: "50%", background: "var(--bg3)", border: "2px solid " + clsColor, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.3rem", flexShrink: 0 }
+    }, icon),
+    React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+    React.createElement("div", {
+      style: { fontFamily: "'Cinzel',serif", fontSize: "1rem", color: "var(--text)", marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }
+    }, c.name),
+    React.createElement("div", {
+      style: { fontSize: ".75rem", color: clsColor }
+    }, "Lv " + (ch.level || 1) + " " + (ch.cls || "") + (ch.race ? " \u00B7 " + ch.race : "")),
+    React.createElement("div", {
+      style: { fontSize: ".68rem", color: "var(--text4)", marginTop: 2 }
+    }, "Last played: " + (c.updated_at ? new Date(c.updated_at).toLocaleDateString() : "Never"))),
+    React.createElement("button", {
+      onClick: e => { e.stopPropagation(); deleteChar(c.id, c.name); },
+      disabled: deleting === c.id,
+      style: { background: "none", border: "none", color: "var(--text4)", cursor: "pointer", fontSize: "1.1rem", padding: "4px 8px", flexShrink: 0 }
+    }, deleting === c.id ? "..." : "\uD83D\uDDD1\uFE0F"));
+  })),
+  React.createElement("div", {
+    style: { padding: "16px 0 32px", display: "flex", flexDirection: "column", gap: 10 }
+  },
+  React.createElement(Btn, { onClick: onNew, full: true, size: "lg" }, "+ Create New Character"),
+  React.createElement("button", {
+    onClick: onLogout,
+    style: { background: "none", border: "none", color: "var(--text4)", fontSize: ".8rem", cursor: "pointer", textDecoration: "underline", padding: 8 }
+  }, "Sign out"))));
+}
+
 function GlobalSettings({
   settings,
   setSettings,
@@ -7743,14 +7902,7 @@ function GlobalSettings({
       fontSize: ".75rem",
       color: "var(--text4)"
     }
-  }, ["", "Fade to Black", "Mild", "Moderate", "Visceral", "Maximum"][settings.violence])), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: ".75rem",
-      color: apiKey ? "#86efac" : "#f87171",
-      textAlign: "center",
-      fontFamily: "'Cinzel',serif"
-    }
-  }, apiKey ? "✓ API key connected" : "⚠ No API key — AI features disabled"))));
+  }, ["", "Fade to Black", "Mild", "Moderate", "Visceral", "Maximum"][settings.violence])))));
 }
 
 function GlobalSettingsBtn({
@@ -7858,6 +8010,10 @@ function App() {
         setScreen("splash");
         return;
       }
+      if (screen === "charselect") {
+        setScreen("splash");
+        return;
+      }
       // On splash, let the OS handle it (exit)  don't intercept
       // But we've already pushed a history entry, so it just pops to the previous page
     }
@@ -7905,7 +8061,7 @@ function App() {
     }
   }
   return /*#__PURE__*/React.createElement(React.Fragment, null, screen === "splash" && /*#__PURE__*/React.createElement(Splash, {
-    onNew: () => isLoggedIn ? setScreen("create") : setScreen("login"),
+    onNew: () => isLoggedIn ? setScreen("charselect") : setScreen("login"),
     onContinue: loadSave,
     hasSave: hasSave,
     savedMeta: savedMeta,
@@ -7913,7 +8069,18 @@ function App() {
   }), screen === "login" && /*#__PURE__*/React.createElement(LoginScreen, {
     onLogin: (user, session) => {
       setAuthUser(session);
-      setScreen("create");
+      setScreen("charselect");
+    }
+  }), screen === "charselect" && /*#__PURE__*/React.createElement(CharSelectScreen, {
+    onSelect: c => {
+      setCharacter(c.data);
+      setScreen("scenarios");
+    },
+    onNew: () => setScreen("create"),
+    onLogout: () => {
+      localStorage.removeItem(AUTH_KEY);
+      setAuthUser(null);
+      setScreen("login");
     }
   }), screen === "create" && /*#__PURE__*/React.createElement(CharCreation, {
     apiKey: apiKey,
