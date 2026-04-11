@@ -9,7 +9,7 @@ const {
 const APP = "Reign of Swords";
 const SAVE_KEY = "ros-v4";
 const MODEL = "claude-sonnet-4-20250514";
-const API_BASE = "https://reign-of-blades-production.up.railway.app";
+const API_BASE = "https://ros-server-production.up.railway.app";
 const AUTH_KEY = "ros-auth-v1";
 
 const RACES = [{
