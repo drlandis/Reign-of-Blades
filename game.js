@@ -9,6 +9,8 @@ const {
 const APP = "Reign of Swords";
 const SAVE_KEY = "ros-v4";
 const MODEL = "claude-sonnet-4-20250514";
+const API_BASE = "https://reign-of-blades-production.up.railway.app";
+const AUTH_KEY = "ros-auth-v1";
 
 const RACES = [{
   name: "Human",
@@ -454,39 +456,49 @@ MECHANICS — use EXACTLY these tags:
 
 Narrate present tense, second person. 2–4 paragraphs. Real consequences.`;
 }
+function getAuthToken() {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Check expiry
+    if (parsed.expires_at && Date.now() / 1000 > parsed.expires_at - 60) return null;
+    return parsed.access_token || null;
+  } catch {
+    return null;
+  }
+}
 async function callClaude(apiKey, sys, messages, maxTokens = 900) {
   var _d$content;
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const token = getAuthToken();
+  if (!token) throw new Error("Not logged in. Please sign in to play.");
+  const r = await fetch(API_BASE + "/claude", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true"
+      "Authorization": "Bearer " + token
     },
     body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
       system: sys,
-      messages
+      messages,
+      max_tokens: maxTokens
     })
   });
   const d = await r.json();
-  if (d.error) throw new Error(d.error.message);
+  if (d.error) throw new Error(d.error);
   return ((_d$content = d.content) === null || _d$content === void 0 || (_d$content = _d$content[0]) === null || _d$content === void 0 ? void 0 : _d$content.text) || "";
 }
 async function callClaudeWithImage(apiKey, prompt, imageB64, mediaType = "image/jpeg") {
   var _d$content2;
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const token = getAuthToken();
+  if (!token) throw new Error("Not logged in.");
+  const r = await fetch(API_BASE + "/claude", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true"
+      "Authorization": "Bearer " + token
     },
     body: JSON.stringify({
-      model: MODEL,
       max_tokens: 50,
       messages: [{
         role: "user",
@@ -505,7 +517,7 @@ async function callClaudeWithImage(apiKey, prompt, imageB64, mediaType = "image/
     })
   });
   const d = await r.json();
-  if (d.error) throw new Error(d.error.message);
+  if (d.error) throw new Error(d.error);
   return ((_d$content2 = d.content) === null || _d$content2 === void 0 || (_d$content2 = _d$content2[0]) === null || _d$content2 === void 0 ? void 0 : _d$content2.text) || "";
 }
 async function compressMem(apiKey, old, existing, charName) {
@@ -7436,26 +7448,54 @@ function Splash({
   }, "Add to Home Screen")))));
 }
 
-function ApiKeyGate({
-  onSet
+function LoginScreen({
+  onLogin
 }) {
-  const [key, setKey] = useState("");
-  const [testing, setTesting] = useState(false);
+  const [mode, setMode] = useState("login"); // "login" or "register"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  async function test() {
-    setTesting(true);
+
+  async function submit() {
+    if (!email.trim() || !password.trim()) return;
+    setLoading(true);
     setErr("");
+    const endpoint = mode === "login" ? "/auth/login" : "/auth/register";
     try {
-      await callClaude(key.trim(), "Reply: OK", [{
-        role: "user",
-        content: "ping"
-      }], 10);
-      onSet(key.trim());
+      const r = await fetch(API_BASE + endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password })
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        setErr(d.error || "Something went wrong.");
+        setLoading(false);
+        return;
+      }
+      // Store session
+      localStorage.setItem(AUTH_KEY, JSON.stringify(d.session));
+      onLogin(d.user, d.session);
     } catch (e) {
-      setErr("Error: " + e.message);
+      setErr("Connection error. Check your internet.");
     }
-    setTesting(false);
+    setLoading(false);
   }
+
+  const inputStyle = {
+    display: "block",
+    width: "100%",
+    background: "var(--bg3)",
+    border: "1px solid var(--border2)",
+    borderRadius: 10,
+    padding: "12px 14px",
+    color: "var(--text)",
+    fontSize: "1rem",
+    marginBottom: 10,
+    boxSizing: "border-box"
+  };
+
   return /*#__PURE__*/React.createElement("div", {
     style: {
       height: "100vh",
@@ -7467,67 +7507,53 @@ function ApiKeyGate({
       padding: "0 24px",
       position: "relative"
     }
-  }, /*#__PURE__*/React.createElement(Stars, {
-    count: 25
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "relative",
-      zIndex: 1,
-      width: "100%",
-      maxWidth: 400
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontFamily: "'Cinzel',serif",
-      fontSize: "1.35rem",
-      color: "var(--text2)",
-      marginBottom: 8,
-      textAlign: "center"
-    }
-  }, "API Key Required"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: ".85rem",
-      color: "var(--text4)",
-      marginBottom: 22,
-      textAlign: "center",
-      lineHeight: 1.65
-    }
-  }, "Enter your Anthropic API key to power the AI Dungeon Master. Keys are stored in your browser only."), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement(Stars, { count: 25 }),
+  /*#__PURE__*/React.createElement("div", {
+    style: { position: "relative", zIndex: 1, width: "100%", maxWidth: 400 }
+  },
+  /*#__PURE__*/React.createElement("div", {
+    style: { fontFamily: "'Cinzel',serif", fontSize: "1.5rem", color: "var(--gold)", marginBottom: 6, textAlign: "center" }
+  }, "Reign of Swords"),
+  /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: ".85rem", color: "var(--text4)", marginBottom: 28, textAlign: "center" }
+  }, mode === "login" ? "Sign in to continue your adventure." : "Create an account to begin."),
+  /*#__PURE__*/React.createElement("input", {
+    type: "email",
+    value: email,
+    onChange: e => setEmail(e.target.value),
+    onKeyDown: e => e.key === "Enter" && submit(),
+    placeholder: "Email",
+    style: inputStyle,
+    autoComplete: "email"
+  }),
+  /*#__PURE__*/React.createElement("input", {
     type: "password",
-    value: key,
-    onChange: e => setKey(e.target.value),
-    onKeyDown: e => e.key === "Enter" && test(),
-    placeholder: "sk-ant-...",
-    style: {
-      display: "block",
-      width: "100%",
-      background: "var(--bg3)",
-      border: "1px solid var(--border2)",
-      borderRadius: 10,
-      padding: "12px 14px",
-      color: "var(--text)",
-      fontSize: "1rem",
-      marginBottom: 10
-    }
-  }), err && /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: "#ef4444",
-      fontSize: ".78rem",
-      marginBottom: 10
-    }
-  }, err), /*#__PURE__*/React.createElement(Btn, {
-    onClick: test,
-    disabled: testing || !key.trim(),
+    value: password,
+    onChange: e => setPassword(e.target.value),
+    onKeyDown: e => e.key === "Enter" && submit(),
+    placeholder: "Password",
+    style: inputStyle,
+    autoComplete: mode === "login" ? "current-password" : "new-password"
+  }),
+  err && /*#__PURE__*/React.createElement("div", {
+    style: { color: "#ef4444", fontSize: ".78rem", marginBottom: 10 }
+  }, err),
+  /*#__PURE__*/React.createElement(Btn, {
+    onClick: submit,
+    disabled: loading || !email.trim() || !password.trim(),
     full: true,
     size: "lg"
-  }, testing ? "Connecting..." : "Connect"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: ".68rem",
-      color: "var(--text4)",
-      marginTop: 14,
-      textAlign: "center"
-    }
-  }, "Get a key at console.anthropic.com")));
+  }, loading ? (mode === "login" ? "Signing in..." : "Creating account...") : (mode === "login" ? "Sign In" : "Create Account")),
+  /*#__PURE__*/React.createElement("div", {
+    style: { textAlign: "center", marginTop: 18 }
+  },
+  /*#__PURE__*/React.createElement("span", {
+    style: { fontSize: ".8rem", color: "var(--text4)" }
+  }, mode === "login" ? "No account? " : "Already have one? "),
+  /*#__PURE__*/React.createElement("span", {
+    onClick: () => { setMode(mode === "login" ? "register" : "login"); setErr(""); },
+    style: { fontSize: ".8rem", color: "var(--gold)", cursor: "pointer", textDecoration: "underline" }
+  }, mode === "login" ? "Create one" : "Sign in"))));
 }
 
 function GlobalSettings({
@@ -7765,7 +7791,17 @@ function App() {
     autoRoll: false
   });
   const [completedIds, setCompletedIds] = useState([]);
-  const [apiKey, setApiKey] = useState("");
+  const [apiKey, setApiKey] = useState("__backend__"); // always truthy - auth handled by token
+  const [authUser, setAuthUser] = useState(() => {
+    try {
+      const raw = localStorage.getItem(AUTH_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed.expires_at && Date.now() / 1000 > parsed.expires_at - 60) return null;
+      return parsed;
+    } catch { return null; }
+  });
+  const isLoggedIn = !!authUser;
   const [lightMode, setLightMode] = useState(false);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
   const [restoreData, setRestoreData] = useState(null); // full game state for resume
@@ -7818,7 +7854,7 @@ function App() {
         setScreen("splash");
         return;
       }
-      if (screen === "apikey") {
+      if (screen === "login") {
         setScreen("splash");
         return;
       }
@@ -7869,14 +7905,14 @@ function App() {
     }
   }
   return /*#__PURE__*/React.createElement(React.Fragment, null, screen === "splash" && /*#__PURE__*/React.createElement(Splash, {
-    onNew: () => setScreen("apikey"),
+    onNew: () => isLoggedIn ? setScreen("create") : setScreen("login"),
     onContinue: loadSave,
     hasSave: hasSave,
     savedMeta: savedMeta,
     onFullscreen: enterFullscreen
-  }), screen === "apikey" && /*#__PURE__*/React.createElement(ApiKeyGate, {
-    onSet: k => {
-      setApiKey(k);
+  }), screen === "login" && /*#__PURE__*/React.createElement(LoginScreen, {
+    onLogin: (user, session) => {
+      setAuthUser(session);
       setScreen("create");
     }
   }), screen === "create" && /*#__PURE__*/React.createElement(CharCreation, {
